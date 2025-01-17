@@ -1,5 +1,5 @@
 /*
- * Copyright 2019-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2019-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -24,19 +24,27 @@
  */
 #define NAME_SEPARATOR ':'
 
+static void ossl_encoder_free(void *data)
+{
+    OSSL_ENCODER_free(data);
+}
+
+static int ossl_encoder_up_ref(void *data)
+{
+    return OSSL_ENCODER_up_ref(data);
+}
+
 /* Simple method structure constructor and destructor */
 static OSSL_ENCODER *ossl_encoder_new(void)
 {
     OSSL_ENCODER *encoder = NULL;
 
-    if ((encoder = OPENSSL_zalloc(sizeof(*encoder))) == NULL
-        || (encoder->base.lock = CRYPTO_THREAD_lock_new()) == NULL) {
+    if ((encoder = OPENSSL_zalloc(sizeof(*encoder))) == NULL)
+        return NULL;
+    if (!CRYPTO_NEW_REF(&encoder->base.refcnt, 1)) {
         OSSL_ENCODER_free(encoder);
-        ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_MALLOC_FAILURE);
         return NULL;
     }
-
-    encoder->base.refcnt = 1;
 
     return encoder;
 }
@@ -45,7 +53,7 @@ int OSSL_ENCODER_up_ref(OSSL_ENCODER *encoder)
 {
     int ref = 0;
 
-    CRYPTO_UP_REF(&encoder->base.refcnt, &ref, encoder->base.lock);
+    CRYPTO_UP_REF(&encoder->base.refcnt, &ref);
     return 1;
 }
 
@@ -56,13 +64,13 @@ void OSSL_ENCODER_free(OSSL_ENCODER *encoder)
     if (encoder == NULL)
         return;
 
-    CRYPTO_DOWN_REF(&encoder->base.refcnt, &ref, encoder->base.lock);
+    CRYPTO_DOWN_REF(&encoder->base.refcnt, &ref);
     if (ref > 0)
         return;
     OPENSSL_free(encoder->base.name);
     ossl_property_free(encoder->base.parsed_propdef);
     ossl_provider_free(encoder->base.prov);
-    CRYPTO_THREAD_lock_free(encoder->base.lock);
+    CRYPTO_FREE_REF(&encoder->base.refcnt);
     OPENSSL_free(encoder);
 }
 
@@ -103,6 +111,28 @@ static void dealloc_tmp_encoder_store(void *store)
 static OSSL_METHOD_STORE *get_encoder_store(OSSL_LIB_CTX *libctx)
 {
     return ossl_lib_ctx_get_data(libctx, OSSL_LIB_CTX_ENCODER_STORE_INDEX);
+}
+
+static int reserve_encoder_store(void *store, void *data)
+{
+    struct encoder_data_st *methdata = data;
+
+    if (store == NULL
+        && (store = get_encoder_store(methdata->libctx)) == NULL)
+        return 0;
+
+    return ossl_method_lock_store(store);
+}
+
+static int unreserve_encoder_store(void *store, void *data)
+{
+    struct encoder_data_st *methdata = data;
+
+    if (store == NULL
+        && (store = get_encoder_store(methdata->libctx)) == NULL)
+        return 0;
+
+    return ossl_method_unlock_store(store);
 }
 
 /* Get encoder methods from a store, or put one in */
@@ -171,8 +201,8 @@ static int put_encoder_in_store(void *store, void *method,
         return 0;
 
     return ossl_method_store_add(store, prov, id, propdef, method,
-                                 (int (*)(void *))OSSL_ENCODER_up_ref,
-                                 (void (*)(void *))OSSL_ENCODER_free);
+                                 ossl_encoder_up_ref,
+                                 ossl_encoder_free);
 }
 
 /* Create and populate a encoder method */
@@ -354,6 +384,8 @@ inner_ossl_encoder_fetch(struct encoder_data_st *methdata,
         || !ossl_method_store_cache_get(store, NULL, id, propq, &method)) {
         OSSL_METHOD_CONSTRUCT_METHOD mcm = {
             get_tmp_encoder_store,
+            reserve_encoder_store,
+            unreserve_encoder_store,
             get_encoder_from_store,
             put_encoder_in_store,
             construct_encoder,
@@ -585,9 +617,7 @@ OSSL_ENCODER_CTX *OSSL_ENCODER_CTX_new(void)
 {
     OSSL_ENCODER_CTX *ctx;
 
-    if ((ctx = OPENSSL_zalloc(sizeof(*ctx))) == NULL)
-        ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_MALLOC_FAILURE);
-
+    ctx = OPENSSL_zalloc(sizeof(*ctx));
     return ctx;
 }
 

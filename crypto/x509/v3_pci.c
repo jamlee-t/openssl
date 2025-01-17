@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2004-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -54,8 +54,8 @@ static int i2r_pci(X509V3_EXT_METHOD *method, PROXY_CERT_INFO_EXTENSION *ext,
 static PROXY_CERT_INFO_EXTENSION *r2i_pci(X509V3_EXT_METHOD *method,
                                           X509V3_CTX *ctx, char *str);
 
-const X509V3_EXT_METHOD ossl_v3_pci =
-    { NID_proxyCertInfo, 0, ASN1_ITEM_ref(PROXY_CERT_INFO_EXTENSION),
+const X509V3_EXT_METHOD ossl_v3_pci = {
+    NID_proxyCertInfo, 0, ASN1_ITEM_ref(PROXY_CERT_INFO_EXTENSION),
     0, 0, 0, 0,
     0, 0,
     NULL, NULL,
@@ -119,7 +119,7 @@ static int process_pci_value(CONF_VALUE *val,
         if (*policy == NULL) {
             *policy = ASN1_OCTET_STRING_new();
             if (*policy == NULL) {
-                ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
+                ERR_raise(ERR_LIB_X509V3, ERR_R_ASN1_LIB);
                 X509V3_conf_err(val);
                 return 0;
             }
@@ -151,7 +151,6 @@ static int process_pci_value(CONF_VALUE *val,
                 OPENSSL_free((*policy)->data);
                 (*policy)->data = NULL;
                 (*policy)->length = 0;
-                ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
                 X509V3_conf_err(val);
                 goto err;
             }
@@ -177,7 +176,6 @@ static int process_pci_value(CONF_VALUE *val,
                     OPENSSL_free((*policy)->data);
                     (*policy)->data = NULL;
                     (*policy)->length = 0;
-                    ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
                     X509V3_conf_err(val);
                     BIO_free_all(b);
                     goto err;
@@ -213,7 +211,6 @@ static int process_pci_value(CONF_VALUE *val,
                 OPENSSL_free((*policy)->data);
                 (*policy)->data = NULL;
                 (*policy)->length = 0;
-                ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
                 X509V3_conf_err(val);
                 goto err;
             }
@@ -223,7 +220,6 @@ static int process_pci_value(CONF_VALUE *val,
             goto err;
         }
         if (!tmp_data) {
-            ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
             X509V3_conf_err(val);
             goto err;
         }
@@ -297,7 +293,7 @@ static PROXY_CERT_INFO_EXTENSION *r2i_pci(X509V3_EXT_METHOD *method,
 
     pci = PROXY_CERT_INFO_EXTENSION_new();
     if (pci == NULL) {
-        ERR_raise(ERR_LIB_X509V3, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_X509V3, ERR_R_ASN1_LIB);
         goto err;
     }
 

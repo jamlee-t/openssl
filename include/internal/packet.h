@@ -1,5 +1,5 @@
 /*
- * Copyright 2015-2021 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2015-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -18,7 +18,6 @@
 # include <openssl/e_os2.h>
 
 # include "internal/numbers.h"
-# include "internal/quic_vlint.h"
 
 typedef struct {
     /* Pointer to where we are currently reading from */
@@ -230,24 +229,24 @@ __owur static ossl_inline int PACKET_peek_net_4(const PACKET *pkt,
 }
 
 /*
- * Decodes a QUIC variable-length integer in |pkt| and stores the result in
- * |data|.
+ * Peek ahead at 8 bytes in network order from |pkt| and store the value in
+ * |*data|
  */
-__owur static ossl_inline int PACKET_get_quic_vlint(PACKET *pkt,
-                                                    uint64_t *data)
+__owur static ossl_inline int PACKET_peek_net_8(const PACKET *pkt,
+                                                uint64_t *data)
 {
-    size_t enclen;
-
-    if (PACKET_remaining(pkt) < 1)
+    if (PACKET_remaining(pkt) < 8)
         return 0;
 
-    enclen = ossl_quic_vlint_decode_len(*pkt->curr);
+    *data = ((uint64_t)(*pkt->curr)) << 56;
+    *data |= ((uint64_t)(*(pkt->curr + 1))) << 48;
+    *data |= ((uint64_t)(*(pkt->curr + 2))) << 40;
+    *data |= ((uint64_t)(*(pkt->curr + 3))) << 32;
+    *data |= ((uint64_t)(*(pkt->curr + 4))) << 24;
+    *data |= ((uint64_t)(*(pkt->curr + 5))) << 16;
+    *data |= ((uint64_t)(*(pkt->curr + 6))) << 8;
+    *data |= *(pkt->curr + 7);
 
-    if (PACKET_remaining(pkt) < enclen)
-        return 0;
-
-    *data = ossl_quic_vlint_decode_unchecked(pkt->curr);
-    packet_forward(pkt, enclen);
     return 1;
 }
 
@@ -273,6 +272,17 @@ __owur static ossl_inline int PACKET_get_net_4_len(PACKET *pkt, size_t *data)
         *data = (size_t)i;
 
     return ret;
+}
+
+/* Get 8 bytes in network order from |pkt| and store the value in |*data| */
+__owur static ossl_inline int PACKET_get_net_8(PACKET *pkt, uint64_t *data)
+{
+    if (!PACKET_peek_net_8(pkt, data))
+        return 0;
+
+    packet_forward(pkt, 8);
+
+    return 1;
 }
 
 /* Peek ahead at 1 byte from |pkt| and store the value in |*data| */
@@ -617,34 +627,7 @@ __owur static ossl_inline int PACKET_get_length_prefixed_3(PACKET *pkt,
     return 1;
 }
 
-/*
- * Reads a variable-length vector prefixed with a QUIC variable-length integer
- * denoting the length, and stores the contents in |subpkt|. |pkt| can equal
- * |subpkt|. Data is not copied: the |subpkt| packet will share its underlying
- * buffer with the original |pkt|, so data wrapped by |pkt| must outlive the
- * |subpkt|. Upon failure, the original |pkt| and |subpkt| are not modified.
- */
-__owur static ossl_inline int PACKET_get_quic_length_prefixed(PACKET *pkt,
-                                                              PACKET *subpkt)
-{
-    uint64_t length;
-    const unsigned char *data;
-    PACKET tmp = *pkt;
-
-    if (!PACKET_get_quic_vlint(&tmp, &length) ||
-        length > SIZE_MAX ||
-        !PACKET_get_bytes(&tmp, &data, (size_t)length)) {
-        return 0;
-    }
-
-    *pkt = tmp;
-    subpkt->curr = data;
-    subpkt->remaining = (size_t)length;
-
-    return 1;
-}
-
-/* Writeable packets */
+/* Writable packets */
 
 typedef struct wpacket_sub WPACKET_SUB;
 struct wpacket_sub {
@@ -885,7 +868,7 @@ int WPACKET_sub_reserve_bytes__(WPACKET *pkt, size_t len,
  * 1 byte will fail. Don't call this directly. Use the convenience macros below
  * instead.
  */
-int WPACKET_put_bytes__(WPACKET *pkt, unsigned int val, size_t bytes);
+int WPACKET_put_bytes__(WPACKET *pkt, uint64_t val, size_t bytes);
 
 /*
  * Convenience macros for calling WPACKET_put_bytes with different
@@ -899,6 +882,8 @@ int WPACKET_put_bytes__(WPACKET *pkt, unsigned int val, size_t bytes);
     WPACKET_put_bytes__((pkt), (val), 3)
 #define WPACKET_put_bytes_u32(pkt, val) \
     WPACKET_put_bytes__((pkt), (val), 4)
+#define WPACKET_put_bytes_u64(pkt, val) \
+    WPACKET_put_bytes__((pkt), (val), 8)
 
 /* Set a maximum size that we will not allow the WPACKET to grow beyond */
 int WPACKET_set_max_size(WPACKET *pkt, size_t maxsize);
@@ -950,34 +935,5 @@ int WPACKET_is_null_buf(WPACKET *pkt);
 
 /* Release resources in a WPACKET if a failure has occurred. */
 void WPACKET_cleanup(WPACKET *pkt);
-
-/*
- * Starts a QUIC sub-packet headed by a QUIC variable-length integer. A 4-byte
- * representation is used.
- */
-__owur int WPACKET_start_quic_sub_packet(WPACKET *pkt);
-
-/*
- * Starts a QUIC sub-packet headed by a QUIC variable-length integer. max_len
- * specifies the upper bound for the sub-packet size at the time the sub-packet
- * is closed, which determines the encoding size for tthe variable-length
- * integer header. max_len can be a precise figure or a worst-case bound
- * if a precise figure is not available.
- */
-__owur int WPACKET_start_quic_sub_packet_bound(WPACKET *pkt, size_t max_len);
-
-/*
- * Allocates a QUIC sub-packet with exactly len bytes of payload, headed by a
- * QUIC variable-length integer. The pointer to the payload buffer is output and
- * must be filled by the caller. This function assures optimal selection of
- * variable-length integer encoding length.
- */
-__owur int WPACKET_quic_sub_allocate_bytes(WPACKET *pkt, size_t len,
-                                           unsigned char **bytes);
-
-/*
- * Write a QUIC variable-length integer to the packet.
- */
-__owur int WPACKET_quic_write_vlint(WPACKET *pkt, uint64_t v);
 
 #endif                          /* OSSL_INTERNAL_PACKET_H */

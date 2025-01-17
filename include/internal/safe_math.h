@@ -16,8 +16,10 @@
 # ifndef OPENSSL_NO_BUILTIN_OVERFLOW_CHECKING
 #  ifdef __has_builtin
 #   define has(func) __has_builtin(func)
-#  elif __GNUC__ > 5
-#   define has(func) 1
+#  elif defined(__GNUC__)
+#   if __GNUC__ > 5
+#    define has(func) 1
+#   endif
 #  endif
 # endif /* OPENSSL_NO_BUILTIN_OVERFLOW_CHECKING */
 
@@ -183,7 +185,7 @@
                                                                type b,       \
                                                                int *err)     \
     {                                                                        \
-        if (a > max / b)                                                     \
+        if (b != 0 && a > max / b)                                           \
             *err |= 1;                                                       \
         return a * b;                                                        \
     }
@@ -321,7 +323,7 @@
                                                                   int *err)  \
     {                                                                        \
         int e2 = 0;                                                          \
-        type q, r, x, y;                                                           \
+        type q, r, x, y;                                                     \
                                                                              \
         if (c == 0) {                                                        \
             *err |= 1;                                                       \

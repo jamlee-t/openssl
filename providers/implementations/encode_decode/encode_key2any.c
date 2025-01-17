@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -91,7 +91,7 @@ static PKCS8_PRIV_KEY_INFO *key_to_p8info(const void *key, int key_nid,
         || (derlen = k2d(key, &der)) <= 0
         || !PKCS8_pkey_set0(p8info, OBJ_nid2obj(key_nid), 0,
                             params_type, params, der, derlen)) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         PKCS8_PRIV_KEY_INFO_free(p8info);
         OPENSSL_free(der);
         p8info = NULL;
@@ -154,7 +154,7 @@ static X509_PUBKEY *key_to_pubkey(const void *key, int key_nid,
         || (derlen = k2d(key, &der)) <= 0
         || !X509_PUBKEY_set0_param(xpk, OBJ_nid2obj(key_nid),
                                    params_type, params, der, derlen)) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_X509_LIB);
         X509_PUBKEY_free(xpk);
         OPENSSL_free(der);
         xpk = NULL;
@@ -380,7 +380,7 @@ static int key_to_type_specific_der_bio(BIO *out, const void *key,
     int ret;
 
     if ((derlen = k2d(key, &der)) <= 0) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_PROV_LIB);
         return 0;
     }
 
@@ -446,7 +446,7 @@ static int prepare_dh_params(const void *dh, int nid, int save,
     ASN1_STRING *params = ASN1_STRING_new();
 
     if (params == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         return 0;
     }
 
@@ -456,7 +456,7 @@ static int prepare_dh_params(const void *dh, int nid, int save,
         params->length = i2d_DHparams(dh, &params->data);
 
     if (params->length <= 0) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         ASN1_STRING_free(params);
         return 0;
     }
@@ -535,8 +535,6 @@ static int dh_check_key_type(const void *dh, int expected_type)
 
 # define dh_evp_type            EVP_PKEY_DH
 # define dhx_evp_type           EVP_PKEY_DHX
-# define dh_input_type          "DH"
-# define dhx_input_type         "DHX"
 # define dh_pem_type            "DH"
 # define dhx_pem_type           "X9.42 DH"
 #endif
@@ -550,14 +548,14 @@ static int encode_dsa_params(const void *dsa, int nid,
     ASN1_STRING *params = ASN1_STRING_new();
 
     if (params == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         return 0;
     }
 
     params->length = i2d_DSAparams(dsa, &params->data);
 
     if (params->length <= 0) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         ASN1_STRING_free(params);
         return 0;
     }
@@ -632,7 +630,6 @@ static int dsa_pki_priv_to_der(const void *dsa, unsigned char **pder)
 
 # define dsa_check_key_type     NULL
 # define dsa_evp_type           EVP_PKEY_DSA
-# define dsa_input_type         "DSA"
 # define dsa_pem_type           "DSA"
 #endif
 
@@ -645,13 +642,13 @@ static int prepare_ec_explicit_params(const void *eckey,
     ASN1_STRING *params = ASN1_STRING_new();
 
     if (params == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         return 0;
     }
 
     params->length = i2d_ECParameters(eckey, &params->data);
     if (params->length <= 0) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         ASN1_STRING_free(params);
         return 0;
     }
@@ -736,19 +733,25 @@ static int ec_pki_priv_to_der(const void *veckey, unsigned char **pder)
 
 # define ec_check_key_type      NULL
 # define ec_evp_type            EVP_PKEY_EC
-# define ec_input_type          "EC"
 # define ec_pem_type            "EC"
 
 # ifndef OPENSSL_NO_SM2
-#  define sm2_evp_type          EVP_PKEY_SM2
-#  define sm2_input_type        "SM2"
+/*
+ * Albeit SM2 is a slightly different algorithm than ECDSA, the key type
+ * encoding (in all places where an AlgorithmIdentifier is produced, such
+ * as PrivateKeyInfo and SubjectPublicKeyInfo) is the same as for ECC keys
+ * according to the example in GM/T 0015-2012, appendix D.2.
+ * This leaves the distinction of SM2 keys to the EC group (which is found
+ * in AlgorithmIdentified.params).
+ */
+#  define sm2_evp_type          ec_evp_type
 #  define sm2_pem_type          "SM2"
 # endif
 #endif
 
 /* ---------------------------------------------------------------------- */
 
-#ifndef OPENSSL_NO_EC
+#ifndef OPENSSL_NO_ECX
 # define prepare_ecx_params NULL
 
 static int ecx_spki_pub_to_der(const void *vecxkey, unsigned char **pder)
@@ -762,10 +765,8 @@ static int ecx_spki_pub_to_der(const void *vecxkey, unsigned char **pder)
     }
 
     keyblob = OPENSSL_memdup(ecxkey->pubkey, ecxkey->keylen);
-    if (keyblob == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+    if (keyblob == NULL)
         return 0;
-    }
 
     *pder = keyblob;
     return ecxkey->keylen;
@@ -788,7 +789,7 @@ static int ecx_pki_priv_to_der(const void *vecxkey, unsigned char **pder)
 
     keybloblen = i2d_ASN1_OCTET_STRING(&oct, pder);
     if (keybloblen < 0) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        ERR_raise(ERR_LIB_PROV, ERR_R_ASN1_LIB);
         return 0;
     }
 
@@ -808,10 +809,6 @@ static int ecx_pki_priv_to_der(const void *vecxkey, unsigned char **pder)
 # define ed448_evp_type         EVP_PKEY_ED448
 # define x25519_evp_type        EVP_PKEY_X25519
 # define x448_evp_type          EVP_PKEY_X448
-# define ed25519_input_type     "ED25519"
-# define ed448_input_type       "ED448"
-# define x25519_input_type      "X25519"
-# define x448_input_type        "X448"
 # define ed25519_pem_type       "ED25519"
 # define ed448_pem_type         "ED448"
 # define x25519_pem_type        "X25519"
@@ -858,14 +855,17 @@ static int prepare_rsa_params(const void *rsa, int nid, int save,
                 case 1:
                     if ((str = OPENSSL_malloc(str_sz)) == NULL
                         || !WPACKET_init_der(&pkt, str, str_sz)) {
+                        WPACKET_cleanup(&pkt);
                         goto err;
                     }
                     break;
                 }
                 if (!ossl_DER_w_RSASSA_PSS_params(&pkt, -1, pss)
                     || !WPACKET_finish(&pkt)
-                    || !WPACKET_get_total_written(&pkt, &str_sz))
+                    || !WPACKET_get_total_written(&pkt, &str_sz)) {
+                    WPACKET_cleanup(&pkt);
                     goto err;
+                }
                 WPACKET_cleanup(&pkt);
 
                 /*
@@ -921,8 +921,6 @@ static int rsa_check_key_type(const void *rsa, int expected_type)
 
 #define rsa_evp_type            EVP_PKEY_RSA
 #define rsapss_evp_type         EVP_PKEY_RSA_PSS
-#define rsa_input_type          "RSA"
-#define rsapss_input_type       "RSA-PSS"
 #define rsa_pem_type            "RSA"
 #define rsapss_pem_type         "RSA-PSS"
 
@@ -1295,7 +1293,7 @@ static int key2any_encode(struct key2any_ctx_st *ctx, OSSL_CORE_BIO *cout,
           (void (*)(void))impl##_to_##kind##_##output##_free_object },      \
         { OSSL_FUNC_ENCODER_ENCODE,                                         \
           (void (*)(void))impl##_to_##kind##_##output##_encode },           \
-        { 0, NULL }                                                         \
+        OSSL_DISPATCH_END                                                   \
     }
 
 /*
@@ -1393,6 +1391,7 @@ MAKE_ENCODER(sm2, ec, EVP_PKEY_EC, PrivateKeyInfo, pem);
 MAKE_ENCODER(sm2, ec, EVP_PKEY_EC, SubjectPublicKeyInfo, der);
 MAKE_ENCODER(sm2, ec, EVP_PKEY_EC, SubjectPublicKeyInfo, pem);
 # endif
+# ifndef OPENSSL_NO_ECX
 MAKE_ENCODER(ed25519, ecx, EVP_PKEY_ED25519, EncryptedPrivateKeyInfo, der);
 MAKE_ENCODER(ed25519, ecx, EVP_PKEY_ED25519, EncryptedPrivateKeyInfo, pem);
 MAKE_ENCODER(ed25519, ecx, EVP_PKEY_ED25519, PrivateKeyInfo, der);
@@ -1417,6 +1416,7 @@ MAKE_ENCODER(x448, ecx, EVP_PKEY_ED448, PrivateKeyInfo, der);
 MAKE_ENCODER(x448, ecx, EVP_PKEY_ED448, PrivateKeyInfo, pem);
 MAKE_ENCODER(x448, ecx, EVP_PKEY_ED448, SubjectPublicKeyInfo, der);
 MAKE_ENCODER(x448, ecx, EVP_PKEY_ED448, SubjectPublicKeyInfo, pem);
+# endif
 #endif
 
 /*

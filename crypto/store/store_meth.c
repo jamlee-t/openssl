@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -21,7 +21,7 @@ int OSSL_STORE_LOADER_up_ref(OSSL_STORE_LOADER *loader)
     int ref = 0;
 
     if (loader->prov != NULL)
-        CRYPTO_UP_REF(&loader->refcnt, &ref, loader->lock);
+        CRYPTO_UP_REF(&loader->refcnt, &ref);
     return 1;
 }
 
@@ -30,11 +30,11 @@ void OSSL_STORE_LOADER_free(OSSL_STORE_LOADER *loader)
     if (loader != NULL && loader->prov != NULL) {
         int i;
 
-        CRYPTO_DOWN_REF(&loader->refcnt, &i, loader->lock);
+        CRYPTO_DOWN_REF(&loader->refcnt, &i);
         if (i > 0)
             return;
         ossl_provider_free(loader->prov);
-        CRYPTO_THREAD_lock_free(loader->lock);
+        CRYPTO_FREE_REF(&loader->refcnt);
     }
     OPENSSL_free(loader);
 }
@@ -48,13 +48,12 @@ static OSSL_STORE_LOADER *new_loader(OSSL_PROVIDER *prov)
     OSSL_STORE_LOADER *loader;
 
     if ((loader = OPENSSL_zalloc(sizeof(*loader))) == NULL
-        || (loader->lock = CRYPTO_THREAD_lock_new()) == NULL) {
+        || !CRYPTO_NEW_REF(&loader->refcnt, 1)) {
         OPENSSL_free(loader);
         return NULL;
     }
     loader->prov = prov;
     ossl_provider_up_ref(prov);
-    loader->refcnt = 1;
 
     return loader;
 }
@@ -106,6 +105,28 @@ static void *get_tmp_loader_store(void *data)
 static OSSL_METHOD_STORE *get_loader_store(OSSL_LIB_CTX *libctx)
 {
     return ossl_lib_ctx_get_data(libctx, OSSL_LIB_CTX_STORE_LOADER_STORE_INDEX);
+}
+
+static int reserve_loader_store(void *store, void *data)
+{
+    struct loader_data_st *methdata = data;
+
+    if (store == NULL
+        && (store = get_loader_store(methdata->libctx)) == NULL)
+        return 0;
+
+    return ossl_method_lock_store(store);
+}
+
+static int unreserve_loader_store(void *store, void *data)
+{
+    struct loader_data_st *methdata = data;
+
+    if (store == NULL
+        && (store = get_loader_store(methdata->libctx)) == NULL)
+        return 0;
+
+    return ossl_method_unlock_store(store);
 }
 
 /* Get loader methods from a store, or put one in */
@@ -198,6 +219,14 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
             if (loader->p_export_object == NULL)
                 loader->p_export_object = OSSL_FUNC_store_export_object(fns);
             break;
+        case OSSL_FUNC_STORE_DELETE:
+            if (loader->p_delete == NULL)
+                loader->p_delete = OSSL_FUNC_store_delete(fns);
+            break;
+        case OSSL_FUNC_STORE_OPEN_EX:
+            if (loader->p_open_ex == NULL)
+                loader->p_open_ex = OSSL_FUNC_store_open_ex(fns);
+            break;
         }
     }
 
@@ -205,7 +234,7 @@ static void *loader_from_algorithm(int scheme_id, const OSSL_ALGORITHM *algodef,
         || loader->p_load == NULL
         || loader->p_eof == NULL
         || loader->p_close == NULL) {
-        /* Only set_ctx_params is optionaal */
+        /* Only set_ctx_params is optional */
         OSSL_STORE_LOADER_free(loader);
         ERR_raise(ERR_LIB_OSSL_STORE, OSSL_STORE_R_LOADER_INCOMPLETE);
         return NULL;
@@ -283,6 +312,8 @@ inner_loader_fetch(struct loader_data_st *methdata,
         || !ossl_method_store_cache_get(store, NULL, id, propq, &method)) {
         OSSL_METHOD_CONSTRUCT_METHOD mcm = {
             get_tmp_loader_store,
+            reserve_loader_store,
+            unreserve_loader_store,
             get_loader_from_store,
             put_loader_in_store,
             construct_loader,

@@ -1,5 +1,5 @@
 /*
- * Copyright 1995-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -66,7 +66,7 @@ const OPTIONS dgst_options[] = {
     {"keyform", OPT_KEYFORM, 'f', "Key file format (ENGINE, other values ignored)"},
     {"hex", OPT_HEX, '-', "Print as hex dump"},
     {"binary", OPT_BINARY, '-', "Print in binary form"},
-    {"xoflen", OPT_XOFLEN, 'p', "Output length for XOF algorithms"},
+    {"xoflen", OPT_XOFLEN, 'p', "Output length for XOF algorithms. To obtain the maximum security strength set this to 32 (or greater) for SHAKE128, and 64 (or greater) for SHAKE256"},
     {"d", OPT_DEBUG, '-', "Print debug info"},
     {"debug", OPT_DEBUG, '-', "Print debug info"},
 
@@ -114,6 +114,8 @@ int dgst_main(int argc, char **argv)
 
     buf = app_malloc(BUFSIZE, "I/O buffer");
     md = (EVP_MD *)EVP_get_digestbyname(argv[0]);
+    if (md != NULL)
+        digestname = argv[0];
 
     opt_set_unknown_name("digest");
     prog = opt_init(argc, argv, dgst_options);
@@ -319,11 +321,15 @@ int dgst_main(int argc, char **argv)
         sigkey = app_keygen(mac_ctx, mac_name, 0, 0 /* not verbose */);
         /* Verbose output would make external-tests gost-engine fail */
         EVP_PKEY_CTX_free(mac_ctx);
+        if (sigkey == NULL)
+            goto end;
     }
 
     if (hmac_key != NULL) {
-        if (md == NULL)
+        if (md == NULL) {
             md = (EVP_MD *)EVP_sha256();
+            digestname = SN_sha256;
+        }
         sigkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_HMAC, impl,
                                               (unsigned char *)hmac_key,
                                               strlen(hmac_key));
@@ -341,9 +347,19 @@ int dgst_main(int argc, char **argv)
             goto end;
         }
         if (do_verify)
-            res = EVP_DigestVerifyInit(mctx, &pctx, md, impl, sigkey);
+            if (impl == NULL)
+                res = EVP_DigestVerifyInit_ex(mctx, &pctx, digestname,
+                                              app_get0_libctx(),
+                                              app_get0_propq(), sigkey, NULL);
+            else
+                res = EVP_DigestVerifyInit(mctx, &pctx, md, impl, sigkey);
         else
-            res = EVP_DigestSignInit(mctx, &pctx, md, impl, sigkey);
+            if (impl == NULL)
+                res = EVP_DigestSignInit_ex(mctx, &pctx, digestname,
+                                            app_get0_libctx(),
+                                            app_get0_propq(), sigkey, NULL);
+            else
+                res = EVP_DigestSignInit(mctx, &pctx, md, impl, sigkey);
         if (res == 0) {
             BIO_printf(bio_err, "Error setting context\n");
             goto end;
@@ -403,10 +419,15 @@ int dgst_main(int argc, char **argv)
         md_name = EVP_MD_get0_name(md);
 
     if (xoflen > 0) {
-        if (!(EVP_MD_get_flags(md) & EVP_MD_FLAG_XOF)) {
+        if (!EVP_MD_xof(md)) {
             BIO_printf(bio_err, "Length can only be specified for XOF\n");
             goto end;
         }
+        /*
+         * Signing using XOF is not supported by any algorithms currently since
+         * each algorithm only calls EVP_DigestFinal_ex() in their sign_final
+         * and verify_final methods.
+         */
         if (sigkey != NULL) {
             BIO_printf(bio_err, "Signing key cannot be specified for XOF\n");
             goto end;
@@ -458,7 +479,7 @@ int dgst_main(int argc, char **argv)
 static void show_digests(const OBJ_NAME *name, void *arg)
 {
     struct doall_dgst_digests *dec = (struct doall_dgst_digests *)arg;
-    const EVP_MD *md = NULL;
+    EVP_MD *md = NULL;
 
     /* Filter out signed digests (a.k.a signature algorithms) */
     if (strstr(name->name, "rsa") != NULL || strstr(name->name, "RSA") != NULL)
@@ -468,9 +489,11 @@ static void show_digests(const OBJ_NAME *name, void *arg)
         return;
 
     /* Filter out message digests that we cannot use */
-    md = EVP_get_digestbyname(name->name);
-    if (md == NULL)
-        return;
+    md = EVP_MD_fetch(app_get0_libctx(), name->name, app_get0_propq());
+    if (md == NULL) {
+        if (EVP_get_digestbyname(name->name) == NULL)
+            return;
+    }
 
     BIO_printf(dec->bio, "-%-25s", name->name);
     if (++dec->n == 3) {
@@ -479,6 +502,8 @@ static void show_digests(const OBJ_NAME *name, void *arg)
     } else {
         BIO_printf(dec->bio, " ");
     }
+
+    EVP_MD_free(md);
 }
 
 /*
@@ -491,7 +516,7 @@ static void show_digests(const OBJ_NAME *name, void *arg)
  * in the '*sum' checksum programs. This aims to preserve backward
  * compatibility.
  */
-static const char *newline_escape_filename(const char *file, int * backslash)
+static const char *newline_escape_filename(const char *file, int *backslash)
 {
     size_t i, e = 0, length = strlen(file), newline_count = 0, mem_len = 0;
     char *file_cpy = NULL;

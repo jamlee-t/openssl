@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2011-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -49,6 +49,8 @@
 #   else
 #    error "unsupported ARM architecture"
 #   endif
+#  elif defined(__ARM_ARCH)
+#   define __ARM_ARCH__ __ARM_ARCH
 #  endif
 # endif
 
@@ -85,6 +87,8 @@ extern unsigned int OPENSSL_armv8_rsa_neonized;
 # define ARMV8_UNROLL8_EOR3      (1<<12)
 # define ARMV8_SVE       (1<<13)
 # define ARMV8_SVE2      (1<<14)
+# define ARMV8_HAVE_SHA3_AND_WORTH_USING     (1<<15)
+# define ARMV8_UNROLL12_EOR3     (1<<16)
 
 /*
  * MIDR_EL1 system register
@@ -97,24 +101,45 @@ extern unsigned int OPENSSL_armv8_rsa_neonized;
  */
 
 # define ARM_CPU_IMP_ARM           0x41
+# define HISI_CPU_IMP              0x48
+# define ARM_CPU_IMP_APPLE         0x61
+# define ARM_CPU_IMP_MICROSOFT     0x6D
+# define ARM_CPU_IMP_AMPERE        0xC0
 
 # define ARM_CPU_PART_CORTEX_A72   0xD08
 # define ARM_CPU_PART_N1           0xD0C
 # define ARM_CPU_PART_V1           0xD40
 # define ARM_CPU_PART_N2           0xD49
+# define HISI_CPU_PART_KP920       0xD01
+# define ARM_CPU_PART_V2           0xD4F
+
+# define APPLE_CPU_PART_M1_ICESTORM         0x022
+# define APPLE_CPU_PART_M1_FIRESTORM        0x023
+# define APPLE_CPU_PART_M1_ICESTORM_PRO     0x024
+# define APPLE_CPU_PART_M1_FIRESTORM_PRO    0x025
+# define APPLE_CPU_PART_M1_ICESTORM_MAX     0x028
+# define APPLE_CPU_PART_M1_FIRESTORM_MAX    0x029
+# define APPLE_CPU_PART_M2_BLIZZARD         0x032
+# define APPLE_CPU_PART_M2_AVALANCHE        0x033
+# define APPLE_CPU_PART_M2_BLIZZARD_PRO     0x034
+# define APPLE_CPU_PART_M2_AVALANCHE_PRO    0x035
+# define APPLE_CPU_PART_M2_BLIZZARD_MAX     0x038
+# define APPLE_CPU_PART_M2_AVALANCHE_MAX    0x039
+
+# define MICROSOFT_CPU_PART_COBALT_100      0xD49
 
 # define MIDR_PARTNUM_SHIFT       4
-# define MIDR_PARTNUM_MASK        (0xfff << MIDR_PARTNUM_SHIFT)
+# define MIDR_PARTNUM_MASK        (0xfffU << MIDR_PARTNUM_SHIFT)
 # define MIDR_PARTNUM(midr)       \
            (((midr) & MIDR_PARTNUM_MASK) >> MIDR_PARTNUM_SHIFT)
 
 # define MIDR_IMPLEMENTER_SHIFT   24
-# define MIDR_IMPLEMENTER_MASK    (0xff << MIDR_IMPLEMENTER_SHIFT)
+# define MIDR_IMPLEMENTER_MASK    (0xffU << MIDR_IMPLEMENTER_SHIFT)
 # define MIDR_IMPLEMENTER(midr)   \
            (((midr) & MIDR_IMPLEMENTER_MASK) >> MIDR_IMPLEMENTER_SHIFT)
 
 # define MIDR_ARCHITECTURE_SHIFT  16
-# define MIDR_ARCHITECTURE_MASK   (0xf << MIDR_ARCHITECTURE_SHIFT)
+# define MIDR_ARCHITECTURE_MASK   (0xfU << MIDR_ARCHITECTURE_SHIFT)
 # define MIDR_ARCHITECTURE(midr)  \
            (((midr) & MIDR_ARCHITECTURE_MASK) >> MIDR_ARCHITECTURE_SHIFT)
 
@@ -125,7 +150,7 @@ extern unsigned int OPENSSL_armv8_rsa_neonized;
 
 # define MIDR_CPU_MODEL(imp, partnum) \
            (((imp)     << MIDR_IMPLEMENTER_SHIFT)  | \
-            (0xf       << MIDR_ARCHITECTURE_SHIFT) | \
+            (0xfU      << MIDR_ARCHITECTURE_SHIFT) | \
             ((partnum) << MIDR_PARTNUM_SHIFT))
 
 # define MIDR_IS_CPU_MODEL(midr, imp, partnum) \

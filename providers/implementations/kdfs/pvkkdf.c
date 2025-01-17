@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2018-2023 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -11,6 +11,7 @@
 #include <openssl/core_names.h>
 #include <openssl/proverr.h>
 #include <openssl/err.h>
+#include "internal/numbers.h"    /* SIZE_MAX */
 #include "prov/provider_ctx.h"
 #include "prov/providercommon.h"
 #include "prov/implementations.h"
@@ -45,10 +46,8 @@ static void *kdf_pvk_new(void *provctx)
         return NULL;
 
     ctx = OPENSSL_zalloc(sizeof(*ctx));
-    if (ctx == NULL) {
-        ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+    if (ctx == NULL)
         return NULL;
-    }
     ctx->provctx = provctx;
     kdf_pvk_init(ctx);
     return ctx;
@@ -122,10 +121,8 @@ static int pvk_set_membuf(unsigned char **buffer, size_t *buflen,
     *buflen = 0;
 
     if (p->data_size == 0) {
-        if ((*buffer = OPENSSL_malloc(1)) == NULL) {
-            ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+        if ((*buffer = OPENSSL_malloc(1)) == NULL)
             return 0;
-        }
     } else if (p->data != NULL) {
         if (!OSSL_PARAM_get_octet_string(p, (void **)buffer, 0, buflen))
             return 0;
@@ -185,7 +182,7 @@ static int kdf_pvk_set_ctx_params(void *vctx, const OSSL_PARAM params[])
     KDF_PVK *ctx = vctx;
     OSSL_LIB_CTX *provctx = PROV_LIBCTX_OF(ctx->provctx);
 
-    if (params == NULL)
+    if (ossl_param_is_empty(params))
         return 1;
 
     if (!ossl_prov_digest_load_from_params(&ctx->digest, params, provctx))
@@ -247,5 +244,5 @@ const OSSL_DISPATCH ossl_kdf_pvk_functions[] = {
     { OSSL_FUNC_KDF_GETTABLE_CTX_PARAMS,
       (void(*)(void))kdf_pvk_gettable_ctx_params },
     { OSSL_FUNC_KDF_GET_CTX_PARAMS, (void(*)(void))kdf_pvk_get_ctx_params },
-    { 0, NULL }
+    OSSL_DISPATCH_END
 };

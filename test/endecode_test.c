@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2022 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2020-2024 The OpenSSL Project Authors. All Rights Reserved.
  *
  * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
@@ -47,6 +47,7 @@ OSSL_provider_init_fn ossl_legacy_provider_init;
 
 static int default_libctx = 1;
 static int is_fips = 0;
+static int is_fips_3_0_0 = 0;
 
 static OSSL_LIB_CTX *testctx = NULL;
 static OSSL_LIB_CTX *keyctx = NULL;
@@ -161,6 +162,7 @@ static int test_encode_decode(const char *file, const int line,
     void *encoded = NULL;
     long encoded_len = 0;
     EVP_PKEY *pkey2 = NULL;
+    EVP_PKEY *pkey3 = NULL;
     void *encoded2 = NULL;
     long encoded2_len = 0;
     int ok = 0;
@@ -174,7 +176,7 @@ static int test_encode_decode(const char *file, const int line,
                              output_type, output_structure, pass, pcipher)))
         goto end;
 
-    if ((flags & FLAG_FAIL_IF_FIPS) != 0 && is_fips) {
+    if ((flags & FLAG_FAIL_IF_FIPS) != 0 && is_fips && !is_fips_3_0_0) {
         if (TEST_false(decode_cb(file, line, (void **)&pkey2, encoded,
                                   encoded_len, output_type, output_structure,
                                   (flags & FLAG_DECODE_WITH_TYPE ? type : NULL),
@@ -188,15 +190,25 @@ static int test_encode_decode(const char *file, const int line,
                                 output_type, output_structure,
                                 (flags & FLAG_DECODE_WITH_TYPE ? type : NULL),
                                 selection, pass))
+        || ((output_structure == NULL
+             || strcmp(output_structure, "type-specific") != 0)
+            && !TEST_true(decode_cb(file, line, (void **)&pkey3, encoded, encoded_len,
+                                    output_type, output_structure,
+                                    (flags & FLAG_DECODE_WITH_TYPE ? type : NULL),
+                                    0, pass)))
         || !TEST_true(encode_cb(file, line, &encoded2, &encoded2_len, pkey2, selection,
                                 output_type, output_structure, pass, pcipher)))
         goto end;
 
     if (selection == OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS) {
-        if (!TEST_int_eq(EVP_PKEY_parameters_eq(pkey, pkey2), 1))
+        if (!TEST_int_eq(EVP_PKEY_parameters_eq(pkey, pkey2), 1)
+            || (pkey3 != NULL
+                && !TEST_int_eq(EVP_PKEY_parameters_eq(pkey, pkey3), 1)))
             goto end;
     } else {
-        if (!TEST_int_eq(EVP_PKEY_eq(pkey, pkey2), 1))
+        if (!TEST_int_eq(EVP_PKEY_eq(pkey, pkey2), 1)
+            || (pkey3 != NULL
+                && !TEST_int_eq(EVP_PKEY_eq(pkey, pkey3), 1)))
             goto end;
     }
 
@@ -221,6 +233,7 @@ static int test_encode_decode(const char *file, const int line,
     OPENSSL_free(encoded);
     OPENSSL_free(encoded2);
     EVP_PKEY_free(pkey2);
+    EVP_PKEY_free(pkey3);
     return ok;
 }
 
@@ -1019,6 +1032,10 @@ DOMAIN_KEYS(ECExplicitTri2G);
 IMPLEMENT_TEST_SUITE(ECExplicitTri2G, "EC", 0)
 IMPLEMENT_TEST_SUITE_LEGACY(ECExplicitTri2G, "EC")
 # endif
+# ifndef OPENSSL_NO_SM2
+KEYS(SM2);
+IMPLEMENT_TEST_SUITE(SM2, "SM2", 0)
+# endif
 KEYS(ED25519);
 IMPLEMENT_TEST_SUITE(ED25519, "ED25519", 1)
 KEYS(ED448);
@@ -1323,6 +1340,9 @@ int setup_tests(void)
             return 0;
     }
 
+    /* FIPS(3.0.0): provider imports explicit params but they won't work #17998 */
+    is_fips_3_0_0 = is_fips && fips_provider_version_eq(testctx, 3, 0, 0);
+
 #ifdef STATIC_LEGACY
     /*
      * This test is always statically linked against libcrypto. We must not
@@ -1379,6 +1399,9 @@ int setup_tests(void)
     MAKE_DOMAIN_KEYS(ECExplicitTriNamedCurve, "EC", ec_explicit_tri_params_nc);
     MAKE_DOMAIN_KEYS(ECExplicitTri2G, "EC", ec_explicit_tri_params_explicit);
 # endif
+# ifndef OPENSSL_NO_SM2
+    MAKE_KEYS(SM2, "SM2", NULL);
+# endif
     MAKE_KEYS(ED25519, "ED25519", NULL);
     MAKE_KEYS(ED448, "ED448", NULL);
     MAKE_KEYS(X25519, "X25519", NULL);
@@ -1424,6 +1447,12 @@ int setup_tests(void)
         ADD_TEST_SUITE_LEGACY(ECExplicitTriNamedCurve);
         ADD_TEST_SUITE(ECExplicitTri2G);
         ADD_TEST_SUITE_LEGACY(ECExplicitTri2G);
+# endif
+# ifndef OPENSSL_NO_SM2
+        if (!is_fips_3_0_0) {
+            /* 3.0.0 FIPS provider imports explicit EC params and then fails. */
+            ADD_TEST_SUITE(SM2);
+        }
 # endif
         ADD_TEST_SUITE(ED25519);
         ADD_TEST_SUITE(ED448);
@@ -1481,6 +1510,9 @@ void cleanup_tests(void)
 # ifndef OPENSSL_NO_EC2M
     FREE_DOMAIN_KEYS(ECExplicitTriNamedCurve);
     FREE_DOMAIN_KEYS(ECExplicitTri2G);
+# endif
+# ifndef OPENSSL_NO_SM2
+    FREE_KEYS(SM2);
 # endif
     FREE_KEYS(ED25519);
     FREE_KEYS(ED448);
